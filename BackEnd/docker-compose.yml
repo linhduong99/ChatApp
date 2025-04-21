@@ -52,7 +52,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ./start_daphne.sh
+    command: >
+      sh -c "
+      echo 'Waiting for Django service...' &&
+      until nc -z django 8002; do
+        sleep 2
+        echo 'Still waiting for Django...'
+      done &&
+      echo 'Django is available!' &&
+      daphne -b 0.0.0.0 -p 8003 chat_project.asgi:application"
     volumes:
       - .:/app
     ports:

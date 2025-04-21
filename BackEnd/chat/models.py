@@ -30,6 +30,9 @@ class User(AbstractUser):
     def check_password(self, raw_password):
         return check_password(raw_password, self.password)
 
+    def __str__(self):
+        return f"{self.username} ({self.name or 'No name'})"
+
 class Room(models.Model):
     name = models.CharField(max_length=100, unique=True)
     password = models.CharField(max_length=128, blank=True, null=True)
@@ -41,6 +44,9 @@ class Room(models.Model):
 
     def check_password(self, raw_password):
         return check_password(raw_password, self.password)
+
+    def __str__(self):
+        return f"{self.name} (by {self.created_by.username if self.created_by else 'Unknown'})"
 
 class Message(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='messages')

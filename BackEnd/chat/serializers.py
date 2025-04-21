@@ -1,12 +1,18 @@
 from rest_framework import serializers
 from django.contrib.auth.hashers import make_password, check_password
+from django.contrib.auth.models import Group
 from .models import User, Room, Message
 
 class UserSerializer(serializers.ModelSerializer):
+    groups = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
-        fields = ['id', 'username', 'name', 'avatar', 'bio', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'username', 'name', 'avatar', 'bio', 'created_at', 'groups']
+        read_only_fields = ['id', 'created_at', 'groups']
+    
+    def get_groups(self, obj):
+        return [group.name for group in obj.groups.all()]
 
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -15,11 +21,21 @@ class UserCreateSerializer(serializers.ModelSerializer):
         model = User
         fields = ['username', 'name', 'password', 'avatar', 'bio']
     
+    def validate_username(self, value):
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("Username already exists")
+        return value
+    
     def create(self, validated_data):
         password = validated_data.pop('password')
         user = User(**validated_data)
         user.set_password(password)
         user.save()
+        
+        # Add user to 'user' group
+        user_group, _ = Group.objects.get_or_create(name='user')
+        user.groups.add(user_group)
+        
         return user
 
 class RoomSerializer(serializers.ModelSerializer):

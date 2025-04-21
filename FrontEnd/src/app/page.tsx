@@ -8,7 +8,7 @@ export default function Home() {
 
   useEffect(() => {
     // Check if user is logged in
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('access_token');
     if (token) {
       router.push('/chat');
     } else {

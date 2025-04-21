@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { login, register } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,23 +20,25 @@ export default function LoginPage() {
     setError('');
 
     try {
-      const endpoint = activeTab === 'login' ? '/api/auth/login' : '/api/auth/register';
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(formData),
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Something went wrong');
+      if (activeTab === 'login') {
+        const response = await login(formData.username, formData.password);
+        if (response.success) {
+          router.push('/chat');
+        } else {
+          setError('Login failed');
+        }
+      } else {
+        if (formData.password !== formData.confirmPassword) {
+          setError('Passwords do not match');
+          return;
+        }
+        const response = await register(formData.username, formData.password);
+        if (response.success) {
+          router.push('/chat');
+        } else {
+          setError('Registration failed');
+        }
       }
-
-      const data = await response.json();
-      localStorage.setItem('token', data.token);
-      router.push('/chat');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     }
@@ -92,13 +95,13 @@ export default function LoginPage() {
 
           {/* Form Container */}
           <div className="p-6">
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {error && (
-                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded">
-                  <p className="text-red-700">{error}</p>
-                </div>
-              )}
+            {error && (
+              <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded mb-4">
+                <p className="text-red-700">{error}</p>
+              </div>
+            )}
 
+            <form onSubmit={handleSubmit} className="space-y-4">
               {activeTab === 'register' && (
                 <div className="space-y-4">
                   <div>

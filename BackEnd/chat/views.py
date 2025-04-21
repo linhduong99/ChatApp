@@ -1,13 +1,25 @@
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from .models import Room, Message, User
-from django.contrib.auth import authenticate, login, logout
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .serializers import RoomSerializer, MessageSerializer, UserSerializer, UserCreateSerializer
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.contrib.auth.hashers import check_password
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth.models import Group
+import logging
+
+logger = logging.getLogger(__name__)
+
+class IsAdminOrSelf(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        # Allow admin users to do anything
+        if request.user.is_staff:
+            return True
+        # Allow users to modify their own data
+        return obj == request.user
 
 @login_required
 def chat_room(request, room_name):
@@ -31,34 +43,79 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     permission_classes = [AllowAny]
 
+    def get_permissions(self):
+        if self.action in ['create', 'login']:
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
     def get_serializer_class(self):
         if self.action == 'create':
             return UserCreateSerializer
         return UserSerializer
+
+    def create(self, request, *args, **kwargs):
+        logger.info(f"Attempting to create user with username: {request.data.get('username')}")
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            refresh = RefreshToken.for_user(user)
+            logger.info(f"User created successfully: {user.username}")
+            return Response({
+                'user': serializer.data,
+                'tokens': {
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh),
+                }
+            }, status=status.HTTP_201_CREATED)
+        logger.error(f"User creation failed: {serializer.errors}")
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['post'])
     def login(self, request):
         username = request.data.get('username')
         password = request.data.get('password')
         
+        if not username or not password:
+            return Response({'error': 'Please provide both username and password'}, status=400)
+            
+        # Try to get user directly from database
         try:
             user = User.objects.get(username=username)
             if user.check_password(password):
-                login(request, user)
-                return Response(UserSerializer(user).data)
-            return Response({'error': 'Invalid password'}, status=status.HTTP_400_BAD_REQUEST)
+                refresh = RefreshToken.for_user(user)
+                return Response({
+                    'user': UserSerializer(user).data,
+                    'tokens': {
+                        'access': str(refresh.access_token),
+                        'refresh': str(refresh)
+                    }
+                })
         except User.DoesNotExist:
-            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+            pass
+            
+        return Response({'error': 'Invalid credentials'}, status=401)
 
     @action(detail=False, methods=['post'])
     def logout(self, request):
-        logout(request)
-        return Response({'message': 'Logged out successfully'})
+        try:
+            refresh_token = request.data["refresh"]
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            logger.info("User logged out successfully")
+            return Response({'message': 'Logged out successfully'})
+        except Exception as e:
+            logger.error(f"Logout failed: {str(e)}")
+            return Response({'error': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'])
+    def me(self, request):
+        logger.info(f"Fetching current user info for: {request.user.username}")
+        return Response(UserSerializer(request.user).data)
 
     @action(detail=True, methods=['delete'])
     def delete_account(self, request, pk=None):
         user = self.get_object()
-        if user == request.user:
+        if user == request.user or request.user.is_staff:
             user.delete()
             return Response({'message': 'Account deleted successfully'})
         return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
@@ -66,7 +123,7 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['put'])
     def change_info(self, request, pk=None):
         user = self.get_object()
-        if user != request.user:
+        if user != request.user and not request.user.is_staff:
             return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data.copy()
@@ -85,7 +142,7 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def change_password(self, request, pk=None):
         user = self.get_object()
-        if user != request.user:
+        if user != request.user and not request.user.is_staff:
             return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
         current_password = request.data.get('current_password')
@@ -106,16 +163,10 @@ class UserViewSet(viewsets.ModelViewSet):
 class RoomViewSet(viewsets.ModelViewSet):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]
 
     def perform_create(self, serializer):
-        user_id = self.request.data.get('user_id')
-        if user_id:
-            try:
-                user = User.objects.get(id=user_id)
-                serializer.save(created_by=user)
-            except User.DoesNotExist:
-                pass
+        serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=['post'])
     def check_password(self, request, pk=None):
@@ -128,20 +179,14 @@ class RoomViewSet(viewsets.ModelViewSet):
 class MessageViewSet(viewsets.ModelViewSet):
     queryset = Message.objects.all()
     serializer_class = MessageSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]
 
     def perform_create(self, serializer):
-        user_id = self.request.data.get('user_id')
-        if user_id:
-            try:
-                user = User.objects.get(id=user_id)
-                serializer.save(user=user)
-            except User.DoesNotExist:
-                pass
+        serializer.save(user=self.request.user)
 
     def get_queryset(self):
         queryset = Message.objects.all()
-        room = self.request.query_params.get('room', None)
-        if room is not None:
-            queryset = queryset.filter(room=room)
-        return queryset 
+        room_id = self.request.query_params.get('room_id', None)
+        if room_id is not None:
+            queryset = queryset.filter(room_id=room_id)
+        return queryset.order_by('created_at') 

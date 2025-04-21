@@ -3,6 +3,8 @@ import logging
 import jwt
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
+from django.contrib.auth import get_user_model
+from django.apps import apps
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +67,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Error in connect: {str(e)}", exc_info=True)
             await self.close(code=1011)  # Internal error
-            # Don't raise StopConsumer here, let the framework handle it
             return
 
     async def disconnect(self, close_code):
@@ -104,7 +105,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                 'id': message.user.id,
                                 'username': message.user.username
                             },
-                            'timestamp': message.created_at.isoformat()
+                            'timestamp': message.timestamp.isoformat()
                         }
                     }
                 )
@@ -121,8 +122,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def get_user(self, user_id):
         try:
-            # Import User model here to avoid AppRegistryNotReady error
-            from .models import User
+            User = get_user_model()
             return User.objects.get(id=user_id)
         except Exception as e:
             logger.warning(f'User not found for id: {user_id}: {str(e)}')
@@ -131,8 +131,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def get_or_create_room(self):
         try:
-            # Import Room model here to avoid AppRegistryNotReady error
-            from .models import Room
+            Room = apps.get_model('chat', 'Room')
             room, created = Room.objects.get_or_create(name=self.room_name)
             return True
         except Exception as e:
@@ -141,8 +140,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def save_message(self, content):
-        # Import models here to avoid AppRegistryNotReady error
-        from .models import Room, Message
+        Room = apps.get_model('chat', 'Room')
+        Message = apps.get_model('chat', 'Message')
         room = Room.objects.get(name=self.room_name)
         return Message.objects.create(
             room=room,
